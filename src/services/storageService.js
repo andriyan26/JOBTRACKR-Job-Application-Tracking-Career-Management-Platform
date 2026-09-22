@@ -42,6 +42,10 @@ function getGmailConfigKey(userId) {
   return `jobtrackr_gmail_config_${userId}`;
 }
 
+function getSyncedEmailsKey(userId) {
+  return `jobtrackr_synced_emails_${userId}`;
+}
+
 // Initialize seed data if not present
 export function initializeStorage() {
   try {
@@ -420,8 +424,9 @@ export function getGmailConfig(userId) {
     }
     return {
       connected: true,
-      email: 'andriyan@gmail.com',
+      email: 'andriandowehz123@gmail.com',
       clientId: DEFAULT_OAUTH_CLIENT_ID,
+      accessToken: null,
       autoSync: true,
       lastSyncedAt: null,
       syncCount: 0
@@ -429,8 +434,9 @@ export function getGmailConfig(userId) {
   } catch {
     return {
       connected: true,
-      email: 'andriyan@gmail.com',
+      email: 'andriandowehz123@gmail.com',
       clientId: DEFAULT_OAUTH_CLIENT_ID,
+      accessToken: null,
       autoSync: true,
       lastSyncedAt: null,
       syncCount: 0
@@ -443,4 +449,24 @@ export function saveGmailConfig(userId, configData) {
   const updated = { ...current, ...configData };
   localStorage.setItem(getGmailConfigKey(userId), JSON.stringify(updated));
   return updated;
+}
+
+// Synced Email Tracker (Prevents duplicates and hides already synced items)
+export function getSyncedEmailIds(userId) {
+  try {
+    const raw = localStorage.getItem(getSyncedEmailsKey(userId));
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markEmailAsSynced(userId, emailId) {
+  if (!emailId || !userId) return [];
+  const current = getSyncedEmailIds(userId);
+  if (!current.includes(emailId)) {
+    current.push(emailId);
+    localStorage.setItem(getSyncedEmailsKey(userId), JSON.stringify(current));
+  }
+  return current;
 }

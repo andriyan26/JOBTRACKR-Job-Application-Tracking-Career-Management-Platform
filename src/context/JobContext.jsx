@@ -19,7 +19,9 @@ import {
   markNotificationRead as markNotifRead,
   clearNotifications as clearNotifs,
   getGmailConfig,
-  saveGmailConfig
+  saveGmailConfig,
+  getSyncedEmailIds,
+  markEmailAsSynced
 } from '../services/storageService';
 import { needsFollowUp, getDaysDifference, getTodayString } from '../services/dateUtils';
 import confetti from 'canvas-confetti';
@@ -35,6 +37,7 @@ export function JobProvider({ children }) {
   const [applicationEvents, setApplicationEvents] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [syncedEmailIds, setSyncedEmailIds] = useState([]);
   const [gmailConfig, setGmailConfig] = useState({ connected: false, email: '', clientId: '', autoSync: true });
   const [loading, setLoading] = useState(true);
 
@@ -56,6 +59,7 @@ export function JobProvider({ children }) {
     const rems = getReminders(userId);
     const notifs = getNotifications(userId);
     const gConfig = getGmailConfig(userId);
+    const synced = getSyncedEmailIds(userId);
 
     setApplications(apps);
     setStatusHistory(history);
@@ -63,6 +67,7 @@ export function JobProvider({ children }) {
     setReminders(rems);
     setNotifications(notifs);
     setGmailConfig(gConfig);
+    setSyncedEmailIds(synced);
     setLoading(false);
   };
 
@@ -250,40 +255,67 @@ export function JobProvider({ children }) {
   };
 
   // Smart Sync orchestration: Takes parsed email metadata and auto-creates or auto-updates
-  const syncParsedJobEmail = (parsed) => {
+  const syncParsedJobEmail = (parsed, emailId = null) => {
     if (!userId) return null;
 
-    // Look for existing application with fuzzy company match
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const pComp = norm(parsed.company_name);
+    const pRole = norm(parsed.position);
+
+    // Strict duplicate check
     const existing = applications.find((a) => {
-      const aName = a.company_name.toLowerCase().replace(/pt|tbk|inc|\.|\s/g, '');
-      const pName = parsed.company_name.toLowerCase().replace(/pt|tbk|inc|\.|\s/g, '');
-      return aName.includes(pName) || pName.includes(aName);
+      const aComp = norm(a.company_name);
+      const aRole = norm(a.position);
+
+      const compMatch =
+        aComp.length >= 3 &&
+        pComp.length >= 3 &&
+        (aComp === pComp || aComp.includes(pComp) || pComp.includes(aComp));
+
+      const roleMatch = !pRole || !aRole || aRole.includes(pRole) || pRole.includes(aRole);
+
+      return compMatch && roleMatch;
     });
 
     if (existing) {
-      // Auto-update existing application
-      const updated = changeStatus(existing.id, parsed.current_status, parsed.summary);
+      if (existing.current_status !== parsed.current_status) {
+        // Update status of existing application
+        const updated = changeStatus(existing.id, parsed.current_status, parsed.summary);
 
-      if (parsed.current_status === 'Interview' && parsed.interview_date) {
-        addEvent(existing.id, {
-          event_type: 'Interview',
-          event_date: parsed.interview_date,
-          title: `Interview: ${existing.company_name}`,
-          description: parsed.summary
+        if (parsed.current_status === 'Interview' && parsed.interview_date) {
+          addEvent(existing.id, {
+            event_type: 'Interview',
+            event_date: parsed.interview_date,
+            title: `Interview: ${existing.company_name}`,
+            description: parsed.summary
+          });
+        }
+
+        pushNotification({
+          title: `📧 Status Updated: ${existing.company_name}`,
+          message: `Application status updated to "${parsed.current_status}".`,
+          type: parsed.current_status.toLowerCase(),
+          source: 'gmail',
+          link_app_id: existing.id
         });
+
+        if (emailId) {
+          markEmailAsSynced(userId, emailId);
+          setSyncedEmailIds(getSyncedEmailIds(userId));
+        }
+
+        refreshData();
+        return { action: 'updated', application: updated };
+      } else {
+        // Exactly identical application and status -> Prevent duplicate insertion!
+        if (emailId) {
+          markEmailAsSynced(userId, emailId);
+          setSyncedEmailIds(getSyncedEmailIds(userId));
+        }
+        return { action: 'already_exists', application: existing };
       }
-
-      pushNotification({
-        title: `📧 Status Updated: ${existing.company_name}`,
-        message: `Application status auto-updated to "${parsed.current_status}" via Gmail sync.`,
-        type: parsed.current_status.toLowerCase(),
-        source: 'gmail',
-        link_app_id: existing.id
-      });
-
-      return { action: 'updated', application: updated };
     } else {
-      // Auto-create new application
+      // Truly new application -> Auto-create single record
       const newAppData = {
         company_name: parsed.company_name,
         position: parsed.position,
@@ -309,12 +341,18 @@ export function JobProvider({ children }) {
 
       pushNotification({
         title: `✨ New Application Auto-Added: ${created.company_name}`,
-        message: `Detected ${created.position} via ${created.applied_via}. Added to your tracker without manual input!`,
+        message: `Detected ${created.position} via ${created.applied_via}. Added to tracker!`,
         type: 'success',
         source: 'gmail',
         link_app_id: created.id
       });
 
+      if (emailId) {
+        markEmailAsSynced(userId, emailId);
+        setSyncedEmailIds(getSyncedEmailIds(userId));
+      }
+
+      refreshData();
       return { action: 'created', application: created };
     }
   };
@@ -327,6 +365,7 @@ export function JobProvider({ children }) {
         applicationEvents,
         reminders,
         notifications,
+        syncedEmailIds,
         gmailConfig,
         stats,
         loading,

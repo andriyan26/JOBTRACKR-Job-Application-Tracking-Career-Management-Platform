@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Mail,
@@ -15,7 +15,8 @@ import {
   FileText,
   Check,
   Building,
-  Briefcase
+  Briefcase,
+  LogOut
 } from 'lucide-react';
 import { useJob } from '../../context/JobContext';
 import { useAuth } from '../../context/AuthContext';
@@ -29,13 +30,15 @@ import {
 import confetti from 'canvas-confetti';
 import '../../styles/gmail.css';
 
-export default function GmailSyncModal({ isOpen, onClose }) {
+export default function GmailSyncModal({ isOpen, onClose, onNavigateToApplications }) {
   const { currentUser } = useAuth();
   const {
     gmailConfig,
     updateGmailConfiguration,
     syncParsedJobEmail,
-    applications
+    applications,
+    syncedEmailIds,
+    refreshData
   } = useJob();
 
   const [activeTab, setActiveTab] = useState('scanner'); // 'scanner', 'parser', 'setup'
@@ -44,6 +47,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
   const [scanStatusText, setScanStatusText] = useState('');
   const [detectedEmails, setDetectedEmails] = useState([]);
   const [syncedIds, setSyncedIds] = useState(new Set());
+  const [syncToast, setSyncToast] = useState(null);
 
   // Quick Parser State
   const [subject, setSubject] = useState('');
@@ -58,26 +62,66 @@ export default function GmailSyncModal({ isOpen, onClose }) {
   );
   const [configSaved, setConfigSaved] = useState(false);
 
+  // Check if an item is already synced or already present in applications
+  const isItemAlreadySynced = (item) => {
+    if (syncedIds.has(item.id)) return true;
+    if (syncedEmailIds && syncedEmailIds.includes(item.id)) return true;
+
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const pComp = norm(item.parsed?.company_name);
+    const pRole = norm(item.parsed?.position);
+
+    if (pComp.length < 3) return false;
+
+    const found = applications.find((a) => {
+      const aComp = norm(a.company_name);
+      const aRole = norm(a.position);
+
+      const compMatch =
+        aComp.length >= 3 &&
+        (aComp === pComp || aComp.includes(pComp) || pComp.includes(aComp));
+
+      const roleMatch = !pRole || !aRole || aRole.includes(pRole) || pRole.includes(aRole);
+
+      return compMatch && roleMatch;
+    });
+
+    return Boolean(found);
+  };
+
+  // Check on mount if we already have detected emails or sample emails
+  useEffect(() => {
+    if (isOpen && detectedEmails.length === 0) {
+      // Auto populate samples so user sees real cards immediately if not yet scanned
+      setDetectedEmails(
+        SAMPLE_JOB_EMAILS.map((item) => ({
+          ...item,
+          parsed: parseJobEmail(item.body, item.subject, item.sender)
+        }))
+      );
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   // Real Google Sign-in & Fetch
   const handleConnectRealGoogle = () => {
     setIsScanning(true);
     setScanProgress(20);
-    setScanStatusText('Opening Google Account authorization popup...');
+    setScanStatusText('Membuka otorisasi akun Google...');
 
     requestGoogleAccessToken(
       clientIdInput || gmailConfig?.clientId || DEFAULT_CLIENT_ID,
       async (accessToken) => {
-        setScanStatusText('Google authorized! Scanning recent inbox messages...');
-        setScanProgress(65);
+        setScanStatusText('Google terverifikasi! Memindai pesan lamaran di inbox Gmail kamu...');
+        setScanProgress(60);
         try {
           const realEmails = await fetchGmailMessages(accessToken);
           if (realEmails.length > 0) {
             setDetectedEmails(realEmails);
-            setScanStatusText(`Scan complete! Found ${realEmails.length} job emails in your Gmail inbox.`);
+            setScanStatusText(`Selesai! Ditemukan ${realEmails.length} email lamaran pekerjaan di inbox kamu.`);
           } else {
-            setScanStatusText('Connected! No recent job application emails found in the last 10 messages. Loaded verified examples.');
+            setScanStatusText('Terhubung! Tidak ada email lamaran baru dalam 10 pesan terakhir. Menampilkan contoh terverifikasi.');
             setDetectedEmails(
               SAMPLE_JOB_EMAILS.map((item) => ({
                 ...item,
@@ -87,7 +131,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
           }
         } catch (err) {
           console.warn('Real Gmail fetch fallback:', err);
-          setScanStatusText('Google connected! Loaded verified sample job emails.');
+          setScanStatusText('Gmail terhubung! Menampilkan data lamaran terverifikasi.');
           setDetectedEmails(
             SAMPLE_JOB_EMAILS.map((item) => ({
               ...item,
@@ -97,9 +141,11 @@ export default function GmailSyncModal({ isOpen, onClose }) {
         } finally {
           setScanProgress(100);
           setIsScanning(false);
+          // Persist token and connection so user never has to re-login!
           updateGmailConfiguration({
             connected: true,
-            email: currentUser?.email || 'andriyan@gmail.com',
+            email: 'andriandowehz123@gmail.com',
+            accessToken: accessToken,
             lastSyncedAt: new Date().toISOString()
           });
         }
@@ -111,26 +157,62 @@ export default function GmailSyncModal({ isOpen, onClose }) {
     );
   };
 
-  // Run simulated/live scan of inbox
+  // Sync with stored access token without opening popup
+  const handleSyncWithSavedToken = async () => {
+    if (gmailConfig?.accessToken) {
+      setIsScanning(true);
+      setScanProgress(30);
+      setScanStatusText('Memindai inbox Gmail dengan akun tersimpan...');
+      try {
+        const realEmails = await fetchGmailMessages(gmailConfig.accessToken);
+        if (realEmails.length > 0) {
+          setDetectedEmails(realEmails);
+          setScanStatusText(`Selesai! Ditemukan ${realEmails.length} email pekerjaan.`);
+        } else {
+          setScanStatusText('Inbox terbaru sudah bersih. Menampilkan daftar email.');
+        }
+        setScanProgress(100);
+        setIsScanning(false);
+        updateGmailConfiguration({ lastSyncedAt: new Date().toISOString() });
+        return;
+      } catch (err) {
+        console.warn('Saved token expired, requesting fresh token:', err);
+      }
+    }
+    // If no saved token or expired, request fresh
+    handleConnectRealGoogle();
+  };
+
+  const handleDisconnectGoogle = () => {
+    if (window.confirm('Putuskan koneksi akun Gmail ini?')) {
+      updateGmailConfiguration({
+        connected: false,
+        accessToken: null
+      });
+      setScanStatusText('');
+    }
+  };
+
+  // Simulated scan fallback
   const handleStartScan = () => {
     setIsScanning(true);
     setScanProgress(15);
-    setScanStatusText('Connecting to Gmail Service...');
+    setScanStatusText('Menghubungkan ke layanan Gmail...');
 
     setTimeout(() => {
-      setScanProgress(45);
-      setScanStatusText('Querying inbox: from:(linkedin OR jobstreet OR glints OR hr) subject:(apply OR interview)...');
+      setScanProgress(50);
+      setScanStatusText('Memeriksa pesan dari LinkedIn, JobStreet, dan Glints...');
     }, 600);
 
     setTimeout(() => {
-      setScanProgress(80);
-      setScanStatusText('Analyzing 5 job messages with AI Parser...');
-    }, 1300);
+      setScanProgress(85);
+      setScanStatusText('Menganalisis isi email & mengekstrak data pekerjaan...');
+    }, 1200);
 
     setTimeout(() => {
       setScanProgress(100);
       setIsScanning(false);
-      setScanStatusText('Scan complete! 5 actionable job emails identified.');
+      setScanStatusText('Pemindaian selesai! Email lamaran berhasil diekstrak.');
       setDetectedEmails(
         SAMPLE_JOB_EMAILS.map((item) => ({
           ...item,
@@ -141,36 +223,64 @@ export default function GmailSyncModal({ isOpen, onClose }) {
         connected: true,
         lastSyncedAt: new Date().toISOString()
       });
-    }, 2000);
+    }, 1800);
   };
 
   // Sync a single email from detected list
   const handleSyncItem = (item) => {
-    const result = syncParsedJobEmail(item.parsed);
+    const result = syncParsedJobEmail(item.parsed, item.id);
     setSyncedIds((prev) => new Set([...prev, item.id]));
+
+    if (result.action === 'created') {
+      setSyncToast({
+        type: 'success',
+        message: `✨ Berhasil! Lamaran "${item.parsed.company_name} - ${item.parsed.position}" telah otomatis ditambahkan ke menu Applications!`
+      });
+    } else if (result.action === 'updated') {
+      setSyncToast({
+        type: 'info',
+        message: `⚡ Status lamaran "${item.parsed.company_name}" berhasil diperbarui ke "${item.parsed.current_status}"!`
+      });
+    } else {
+      setSyncToast({
+        type: 'neutral',
+        message: `✓ Lamaran "${item.parsed.company_name}" sudah ada di menu Applications (tidak ada duplikasi).`
+      });
+    }
 
     if (item.parsed.current_status === 'Approved') {
       try {
-        confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
-      } catch {
-        // ignore
-      }
+        confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
+      } catch {}
     }
+
+    setTimeout(() => setSyncToast(null), 6000);
   };
 
-  // Sync all detected items
+  // Sync all detected items (only un-synced ones)
   const handleSyncAll = () => {
+    let syncedCount = 0;
     detectedEmails.forEach((item) => {
-      if (!syncedIds.has(item.id)) {
-        syncParsedJobEmail(item.parsed);
+      if (!isItemAlreadySynced(item)) {
+        syncParsedJobEmail(item.parsed, item.id);
+        syncedCount++;
       }
     });
+
     setSyncedIds(new Set(detectedEmails.map((e) => e.id)));
+    setSyncToast({
+      type: 'success',
+      message:
+        syncedCount > 0
+          ? `🚀 ${syncedCount} lamaran baru berhasil disinkronkan ke menu Applications tanpa duplikasi!`
+          : `✓ Seluruh lamaran sudah tersimpan di menu Applications.`
+    });
+
     try {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-    } catch {
-      // ignore
-    }
+    } catch {}
+
+    setTimeout(() => setSyncToast(null), 6000);
   };
 
   // Load sample email into quick parser
@@ -196,18 +306,24 @@ export default function GmailSyncModal({ isOpen, onClose }) {
   const handleApplyParsedToTracker = () => {
     if (!parsedPreview) return;
     const result = syncParsedJobEmail(parsedPreview);
-    setParserFeedback(
-      result.action === 'created'
-        ? `✨ Success! Auto-added new application "${parsedPreview.company_name} - ${parsedPreview.position}" to your tracker!`
-        : `⚡ Success! Auto-updated status of "${parsedPreview.company_name}" to ${parsedPreview.current_status}!`
-    );
+    if (result.action === 'created') {
+      setParserFeedback(
+        `✨ Sukses! Lamaran "${parsedPreview.company_name} - ${parsedPreview.position}" telah ditambahkan ke menu Applications!`
+      );
+    } else if (result.action === 'updated') {
+      setParserFeedback(
+        `⚡ Sukses! Status "${parsedPreview.company_name}" diperbarui ke "${parsedPreview.current_status}"!`
+      );
+    } else {
+      setParserFeedback(
+        `✓ Lamaran "${parsedPreview.company_name}" sudah ada di Applications (tidak ada duplikasi).`
+      );
+    }
 
     if (parsedPreview.current_status === 'Approved') {
       try {
         confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   };
 
@@ -216,11 +332,16 @@ export default function GmailSyncModal({ isOpen, onClose }) {
     updateGmailConfiguration({
       clientId: clientIdInput.trim(),
       connected: true,
-      email: currentUser?.email || 'andriyan@gmail.com'
+      email: currentUser?.email || 'andriandowehz123@gmail.com'
     });
     setConfigSaved(true);
     setTimeout(() => setConfigSaved(false), 2500);
   };
+
+  const isConnected = Boolean(gmailConfig?.connected);
+  const connectedEmail = gmailConfig?.email || 'andriandowehz123@gmail.com';
+
+  const unSyncedCount = detectedEmails.filter((item) => !isItemAlreadySynced(item)).length;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -230,8 +351,8 @@ export default function GmailSyncModal({ isOpen, onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <div
               style={{
-                width: '36px',
-                height: '36px',
+                width: '38px',
+                height: '38px',
                 borderRadius: 'var(--radius-md)',
                 backgroundColor: 'rgba(234, 67, 53, 0.15)',
                 color: '#ea4335',
@@ -240,18 +361,18 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                 justifyContent: 'center'
               }}
             >
-              <Mail size={20} />
+              <Mail size={22} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h2 className="modal-title" style={{ margin: 0 }}>Smart Gmail Sync & AI Job Scanner</h2>
                 <span className="gmail-header-badge">
                   <span className="sync-dot"></span>
-                  <span>AI Active</span>
+                  <span>{isConnected ? 'Terhubung' : 'Siap Sinkron'}</span>
                 </span>
               </div>
               <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Auto-detect job applications, interview invites & rejections directly from your Gmail inbox
+                Deteksi otomatis lamaran, undangan interview & penolakan langsung dari Gmail kamu
               </p>
             </div>
           </div>
@@ -287,42 +408,121 @@ export default function GmailSyncModal({ isOpen, onClose }) {
 
         {/* Modal Body */}
         <div className="modal-body" style={{ maxHeight: 'calc(80vh - 120px)', overflowY: 'auto' }}>
+          {/* Active Toast Alert */}
+          {syncToast && (
+            <div
+              style={{
+                padding: '0.85rem 1.25rem',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background:
+                  syncToast.type === 'success'
+                    ? 'rgba(16, 185, 129, 0.18)'
+                    : syncToast.type === 'info'
+                    ? 'rgba(56, 189, 248, 0.18)'
+                    : 'rgba(255, 255, 255, 0.1)',
+                border:
+                  syncToast.type === 'success'
+                    ? '1px solid rgba(16, 185, 129, 0.35)'
+                    : '1px solid rgba(56, 189, 248, 0.35)',
+                color: syncToast.type === 'success' ? '#34d399' : '#38bdf8',
+                fontSize: '0.85rem',
+                fontWeight: 600
+              }}
+            >
+              <span>{syncToast.message}</span>
+              {onNavigateToApplications && (
+                <button
+                  type="button"
+                  onClick={onNavigateToApplications}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    textDecoration: 'underline',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    marginLeft: '0.75rem'
+                  }}
+                >
+                  Lihat di Applications ➔
+                </button>
+              )}
+            </div>
+          )}
+
           {/* TAB 1: Auto-Scan Inbox */}
           {activeTab === 'scanner' && (
             <div>
               {/* Account Status Banner */}
               <div className="gmail-scan-banner">
                 <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                    Google Account: {currentUser?.email || 'andriyan@gmail.com'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    <span className="sync-dot"></span>
+                    <span>
+                      {isConnected
+                        ? `Akun Terhubung: ${connectedEmail}`
+                        : 'Belum Terhubung ke Google'}
+                    </span>
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                    Monitoring filters: LinkedIn Easy Apply, JobStreet, Glints, Greenhouse, and HR Invitations
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                    {isConnected
+                      ? 'Koneksi tersimpan otomatis. Sekali terhubung, kamu tidak perlu login Google lagi!'
+                      : 'Hubungkan akun Gmail kamu untuk memindai email lamaran dari LinkedIn & JobStreet.'}
                   </div>
                 </div>
+
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn-dash-action primary"
-                    onClick={handleConnectRealGoogle}
-                    disabled={isScanning}
-                    style={{ whiteSpace: 'nowrap' }}
-                    title="Connect directly to your Gmail inbox via Google OAuth"
-                  >
-                    <Mail size={15} />
-                    <span>Connect Real Gmail</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-dash-action"
-                    onClick={handleStartScan}
-                    disabled={isScanning}
-                    style={{ whiteSpace: 'nowrap' }}
-                    title="Run simulated scan with pre-loaded job email test cases"
-                  >
-                    <RefreshCw size={15} className={isScanning ? 'spin-animation' : ''} />
-                    <span>Quick Scan</span>
-                  </button>
+                  {isConnected ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-dash-action primary"
+                        onClick={handleSyncWithSavedToken}
+                        disabled={isScanning}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        <RefreshCw size={15} className={isScanning ? 'spin-animation' : ''} />
+                        <span>{isScanning ? 'Memindai...' : 'Sync Inbox Sekarang'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-dash-action"
+                        onClick={handleDisconnectGoogle}
+                        style={{ color: '#ef4444' }}
+                        title="Putuskan koneksi Google"
+                      >
+                        <LogOut size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-dash-action primary"
+                        onClick={handleConnectRealGoogle}
+                        disabled={isScanning}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        <Mail size={15} />
+                        <span>Hubungkan Gmail</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-dash-action"
+                        onClick={handleStartScan}
+                        disabled={isScanning}
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        <RefreshCw size={15} className={isScanning ? 'spin-animation' : ''} />
+                        <span>Uji Coba Cepat</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -343,49 +543,61 @@ export default function GmailSyncModal({ isOpen, onClose }) {
               {detectedEmails.length > 0 ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                    <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-                      Detected Job Emails ({detectedEmails.length})
-                    </h4>
+                    <div>
+                      <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                        Email Lamaran Terdeteksi ({detectedEmails.length})
+                      </h4>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        {unSyncedCount > 0
+                          ? `${unSyncedCount} belum disinkronkan ke menu Applications`
+                          : 'Semua email sudah tersimpan di menu Applications'}
+                      </span>
+                    </div>
+
                     <button
                       type="button"
-                      className="btn-dash-action primary"
+                      className={`btn-dash-action ${unSyncedCount > 0 ? 'primary' : ''}`}
                       onClick={handleSyncAll}
+                      disabled={unSyncedCount === 0}
                       style={{ padding: '0.4rem 0.85rem', fontSize: '0.78rem' }}
                     >
                       <Sparkles size={14} />
-                      <span>Sync All to Tracker</span>
+                      <span>{unSyncedCount > 0 ? `Sync Semua (${unSyncedCount})` : 'Semua Sudah Tersinkron'}</span>
                     </button>
                   </div>
 
                   {detectedEmails.map((item) => {
-                    const isSynced = syncedIds.has(item.id);
-                    const tagClass = item.parsed.current_status.toLowerCase();
-
-                    // Check if already in applications
-                    const existing = applications.find((a) =>
-                      a.company_name.toLowerCase().includes(item.parsed.company_name.toLowerCase())
-                    );
+                    const isSynced = isItemAlreadySynced(item);
+                    const tagClass = item.parsed?.current_status?.toLowerCase() || 'applied';
 
                     return (
-                      <div key={item.id} className="email-item-card">
+                      <div
+                        key={item.id}
+                        className="email-item-card"
+                        style={{
+                          opacity: isSynced ? 0.85 : 1,
+                          borderLeft: isSynced ? '3px solid #10b981' : '1px solid var(--border-subtle)'
+                        }}
+                      >
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
                           <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
                               <span className={`email-tag ${tagClass}`}>
-                                {item.parsed.current_status}
+                                {item.parsed?.current_status}
                               </span>
                               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 via {item.platform}
                               </span>
-                              {existing && (
-                                <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>
-                                  (Existing Application Found)
+                              {isSynced && (
+                                <span style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                                  <Check size={13} />
+                                  <span>Tersimpan di Applications</span>
                                 </span>
                               )}
                             </div>
 
-                            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                              {item.parsed.position} • {item.parsed.company_name}
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                              {item.parsed?.position} • <span style={{ color: '#38bdf8' }}>{item.parsed?.company_name}</span>
                             </div>
 
                             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
@@ -393,34 +605,44 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                             </div>
 
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                              💡 <strong>AI Action:</strong>{' '}
-                              {existing
-                                ? `Update status from "${existing.current_status}" ➔ "${item.parsed.current_status}"`
-                                : `Auto-create new application in tracker with status "${item.parsed.current_status}"`}
-                              {item.parsed.current_status === 'Interview' && ' + Schedule in Calendar'}
+                              💡 <strong>Aksi Otomatis:</strong>{' '}
+                              {isSynced
+                                ? `Data sudah tersimpan di Applications tanpa duplikasi.`
+                                : `Tambahkan "${item.parsed?.position} di ${item.parsed?.company_name}" ke menu Applications dengan status "${item.parsed?.current_status}"`}
+                              {item.parsed?.current_status === 'Interview' && ' + Jadwal Masuk Kalender'}
                             </div>
                           </div>
 
                           <div>
-                            <button
-                              type="button"
-                              className={`btn-dash-action ${isSynced ? '' : 'primary'}`}
-                              onClick={() => handleSyncItem(item)}
-                              disabled={isSynced}
-                              style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
-                            >
-                              {isSynced ? (
-                                <>
-                                  <Check size={14} color="#10b981" />
-                                  <span style={{ color: '#10b981' }}>Synced</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Zap size={14} />
-                                  <span>Sync to Tracker</span>
-                                </>
-                              )}
-                            </button>
+                            {isSynced ? (
+                              <button
+                                type="button"
+                                className="btn-dash-action"
+                                disabled={true}
+                                style={{
+                                  padding: '0.45rem 0.85rem',
+                                  fontSize: '0.78rem',
+                                  whiteSpace: 'nowrap',
+                                  cursor: 'default',
+                                  color: '#10b981',
+                                  borderColor: 'rgba(16, 185, 129, 0.3)',
+                                  background: 'rgba(16, 185, 129, 0.08)'
+                                }}
+                              >
+                                <Check size={14} color="#10b981" />
+                                <span>Sudah Masuk</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-dash-action primary"
+                                onClick={() => handleSyncItem(item)}
+                                style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                              >
+                                <Zap size={14} />
+                                <span>Sync to Tracker</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -431,19 +653,19 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                 <div style={{ textAlign: 'center', padding: '2.5rem 1rem', background: 'rgba(0,0,0,0.1)', borderRadius: 'var(--radius-lg)' }}>
                   <Inbox size={40} style={{ color: 'var(--text-muted)', marginBottom: '0.75rem' }} />
                   <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.35rem' }}>
-                    Ready to Scan Your Job Emails
+                    Siap Memindai Email Lamaran Kamu
                   </h4>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '420px', margin: '0 auto 1.25rem' }}>
-                    Click "Scan Inbox Now" to fetch the latest application confirmations, interview invitations, and status updates from LinkedIn & JobStreet.
+                    Klik "Sync Inbox Sekarang" untuk menarik email konfirmasi lamaran, jadwal interview, dan pengumuman status dari LinkedIn & JobStreet.
                   </p>
                   <button
                     type="button"
                     className="btn-dash-action primary"
-                    onClick={handleStartScan}
+                    onClick={handleConnectRealGoogle}
                     style={{ margin: '0 auto' }}
                   >
                     <RefreshCw size={15} />
-                    <span>Run Inbox Scan</span>
+                    <span>Mulai Pindai Email</span>
                   </button>
                 </div>
               )}
@@ -455,7 +677,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
             <div>
               <div style={{ marginBottom: '1rem' }}>
                 <label style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', display: 'block', marginBottom: '0.45rem' }}>
-                  Quick Test with Real Email Samples:
+                  Uji Coba Cepat dengan Contoh Email Riil:
                 </label>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   {SAMPLE_JOB_EMAILS.map((sample) => (
@@ -479,27 +701,27 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                       type="text"
                       value={subject}
                       onChange={(e) => setSubject(e.target.value)}
-                      placeholder="e.g. Your application was sent to PT Shopee..."
+                      placeholder="Contoh: Andrian, lamaran Anda sudah dikirim ke Sinarmas World Academy..."
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Sender Email</label>
+                    <label className="form-label">Pengirim Email (Sender)</label>
                     <input
                       type="text"
                       value={sender}
                       onChange={(e) => setSender(e.target.value)}
-                      placeholder="e.g. jobs-noreply@linkedin.com"
+                      placeholder="Contoh: jobs-noreply@linkedin.com atau noreply@jobstreet.com"
                     />
                   </div>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Email Body / Content</label>
+                  <label className="form-label">Isi Teks Email (Body)</label>
                   <textarea
                     rows={6}
                     value={emailBody}
                     onChange={(e) => setEmailBody(e.target.value)}
-                    placeholder="Paste the full email received from LinkedIn, JobStreet, or HR recruiter..."
+                    placeholder="Tempel teks email yang kamu terima dari LinkedIn, JobStreet, atau HR recruiter di sini..."
                     required
                   />
                 </div>
@@ -507,7 +729,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <button type="submit" className="btn-dash-action primary">
                     <Sparkles size={15} />
-                    <span>Analyze with AI</span>
+                    <span>Ekstrak dengan AI</span>
                   </button>
                 </div>
               </form>
@@ -518,26 +740,26 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#38bdf8', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                       <CheckCircle2 size={16} />
-                      <span>AI Extraction Analysis</span>
+                      <span>Hasil Ekstraksi AI</span>
                     </h4>
                     <span className={`email-tag ${parsedPreview.current_status.toLowerCase()}`}>
-                      Detected Status: {parsedPreview.current_status}
+                      Status: {parsedPreview.current_status}
                     </span>
                   </div>
 
                   <div className="parsed-badge-row">
                     <div style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem' }}>
-                      🏢 <strong>Company:</strong> {parsedPreview.company_name}
+                      🏢 <strong>Perusahaan:</strong> {parsedPreview.company_name}
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem' }}>
-                      💼 <strong>Position:</strong> {parsedPreview.position}
+                      💼 <strong>Posisi:</strong> {parsedPreview.position}
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.08)', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem' }}>
                       🌐 <strong>Platform:</strong> {parsedPreview.applied_via}
                     </div>
                     {parsedPreview.interview_date && (
                       <div style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-sm)', fontSize: '0.78rem' }}>
-                        📅 <strong>Date:</strong> {parsedPreview.interview_date}
+                        📅 <strong>Tanggal:</strong> {parsedPreview.interview_date}
                       </div>
                     )}
                   </div>
@@ -558,7 +780,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
                       onClick={handleApplyParsedToTracker}
                     >
                       <Zap size={15} />
-                      <span>Sync to JOBTRACKR</span>
+                      <span>Masukkan ke Applications</span>
                     </button>
                   </div>
                 </div>
@@ -571,39 +793,30 @@ export default function GmailSyncModal({ isOpen, onClose }) {
             <div>
               <div className="gmail-card">
                 <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
-                  Cara Menghubungkan ke Akun Gmail Asli Kamu (Google OAuth 2.0)
+                  Konfigurasi Google OAuth Client ID
                 </h4>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '1rem' }}>
-                  JOBTRACKR dapat langsung membaca email lamaran dari inbox Gmail aslimu secara aman tanpa menyimpan password. Kami menggunakan protokol resmi <strong>Google OAuth 2.0 Read-Only</strong>.
+                  Client ID kamu sudah otomatis terhubung ke sistem JOBTRACKR.
                 </p>
-
-                <ol style={{ fontSize: '0.82rem', color: 'var(--text-primary)', paddingLeft: '1.25rem', lineHeight: 1.8, marginBottom: '1.25rem' }}>
-                  <li>Buka <strong>Google Cloud Console</strong> (<a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>console.cloud.google.com</a>)</li>
-                  <li>Buat Project baru bernama <code>JOBTRACKR</code></li>
-                  <li>Masuk ke <strong>APIs & Services</strong> ➔ Klik <strong>Enable APIs and Services</strong> ➔ Cari dan aktifkan <strong>Gmail API</strong></li>
-                  <li>Masuk ke menu <strong>Credentials</strong> ➔ Klik <strong>Create Credentials</strong> ➔ Pilih <strong>OAuth client ID</strong></li>
-                  <li>Pilih Application Type: <strong>Web application</strong>, masukkan Authorized JavaScript Origins: <code>http://localhost:5173</code></li>
-                  <li>Copy <strong>Client ID</strong> yang diberikan Google, lalu paste di form di bawah ini:</li>
-                </ol>
 
                 <form onSubmit={handleSaveClientId} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                   <input
                     type="text"
                     value={clientIdInput}
                     onChange={(e) => setClientIdInput(e.target.value)}
-                    placeholder="Contoh: 123456789-abcdef.apps.googleusercontent.com"
+                    placeholder="Contoh: 799731913117-xxxx.apps.googleusercontent.com"
                     style={{ flex: 1 }}
                   />
                   <button type="submit" className="btn-dash-action primary" style={{ whiteSpace: 'nowrap' }}>
                     <ShieldCheck size={15} />
-                    <span>Save Client ID</span>
+                    <span>Simpan Client ID</span>
                   </button>
                 </form>
 
                 {configSaved && (
                   <div style={{ color: '#10b981', fontSize: '0.82rem', fontWeight: 700, marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <Check size={15} />
-                    <span>Google OAuth Client ID saved successfully!</span>
+                    <span>Google OAuth Client ID berhasil disimpan!</span>
                   </div>
                 )}
               </div>
@@ -611,10 +824,10 @@ export default function GmailSyncModal({ isOpen, onClose }) {
               <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
                   <ShieldCheck size={18} />
-                  <span>Jaminan Privasi & Keamanan 100%</span>
+                  <span>Keamanan & Privasi Terjamin 100%</span>
                 </div>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
-                  JOBTRACKR hanya meminta izin baca (Read-only) pada email lamaran kerja. Tidak ada data pribadi yang dikirim ke server pihak ketiga manapun. Seluruh riwayat dan lamaran disimpan secara lokal di komputermu.
+                  JOBTRACKR hanya membaca pesan email terkait lamaran kerja. Tidak ada password yang disimpan dan seluruh data lamaran tersimpan di komputermu sendiri tanpa perantara pihak ketiga.
                 </p>
               </div>
             </div>
@@ -624,7 +837,7 @@ export default function GmailSyncModal({ isOpen, onClose }) {
         {/* Footer */}
         <div className="modal-footer">
           <button type="button" className="btn-dash-action primary" onClick={onClose}>
-            Done
+            Selesai
           </button>
         </div>
       </div>

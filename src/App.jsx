@@ -131,6 +131,10 @@ function MainApp() {
         <GmailSyncModal
           isOpen={isGmailSyncOpen}
           onClose={() => setIsGmailSyncOpen(false)}
+          onNavigateToApplications={() => {
+            setIsGmailSyncOpen(false);
+            handleNavigate('applications');
+          }}
         />
       )}
 
