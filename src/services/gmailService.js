@@ -6,14 +6,20 @@
 
 // Common platform detection patterns
 const PLATFORM_PATTERNS = [
-  { name: 'LinkedIn', regex: /linkedin\.com|linkedin\s*jobs|easy\s*apply/i },
+  { name: 'LinkedIn', regex: /linkedin\.com|linkedin\s*jobs|easy\s*apply|linkedin/i },
   { name: 'JobStreet', regex: /jobstreet\.co|jobstreet\.com|jobstreet/i },
-  { name: 'Glints', regex: /glints\.com|glints/i },
   { name: 'Kalibrr', regex: /kalibrr\.com|kalibrr/i },
+  { name: 'Dealls', regex: /dealls\.com|dealls/i },
+  { name: 'Glints', regex: /glints\.com|glints/i },
+  { name: 'KitaLulus', regex: /kitalulus\.com|kitalulus/i },
   { name: 'Karir.com', regex: /karir\.com|karir/i },
+  { name: 'Tech in Asia', regex: /techinasia\.com|techinasia/i },
+  { name: 'BCA Finance', regex: /bca\s*finance|bcafinance/i },
+  { name: 'I2S Mailer', regex: /i2s|istidata/i },
   { name: 'Greenhouse', regex: /greenhouse\.io|gh_mail/i },
   { name: 'Lever', regex: /lever\.co|jobs\.lever/i },
-  { name: 'Workday', regex: /myworkdayjobs|workday/i }
+  { name: 'Workday', regex: /myworkdayjobs|workday/i },
+  { name: 'Direct Company Mailer', regex: /mailer|recruitment|rekrutmen|hrd|talent/i }
 ];
 
 // Status detection patterns
@@ -60,7 +66,9 @@ const STATUS_PATTERNS = {
     /konfirmasi\s*pengiriman\s*lamaran/i,
     /successfully\s*submitted/i,
     /berhasil\s*melamar/i,
-    /terima\s*kasih\s*telah\s*melamar/i
+    /terima\s*kasih\s*telah\s*melamar/i,
+    /application\s*sent/i,
+    /submitting\s*your\s*application/i
   ]
 };
 
@@ -145,53 +153,84 @@ export function parseJobEmail(emailText, subject = '', sender = '') {
 
 // Helper: Extract Company Name
 function extractCompanyName(subject, text, sender) {
-  const fullText = `${subject}\n${text}`;
+  const fullText = `${subject}\n${sender}\n${text}`;
 
-  // Priority 1: LinkedIn specific Indonesian pattern:
+  // Kalibrr: "Application sent to Data Management Officer at Indonesia Stock Exchange!"
+  const kalibrrMatch = /(?:Application sent to .*? at|sent to .*? at|to .*? at)\s+([A-Za-z0-9\s&.,'-]+?)(?:!|\.|\n|,|$)/i.exec(fullText);
+  if (kalibrrMatch && isCleanCompany(kalibrrMatch[1]) && !/kalibrr/i.test(kalibrrMatch[1])) {
+    return cleanEntityName(kalibrrMatch[1]);
+  }
+  const kalibrrMatch2 = /Talent Acquisition Team\s+([A-Za-z0-9\s&.,'-]+?)\s+at\s+Kalibrr/i.exec(fullText);
+  if (kalibrrMatch2 && isCleanCompany(kalibrrMatch2[1])) {
+    return cleanEntityName(kalibrrMatch2[1]);
+  }
+  const kalibrrMatch3 = /([A-Za-z0-9\s&.,'-]+?)\s+at\s+Kalibrr/i.exec(fullText);
+  if (kalibrrMatch3 && isCleanCompany(kalibrrMatch3[1])) {
+    return cleanEntityName(kalibrrMatch3[1]);
+  }
+
+  // I2S Mailer: "Thanks for submitting your application for a job at PT. Istidata Indopacific Solution Center"
+  const i2sMatch = /(?:for a job at|application at|job at|submitting your application.*?at)\s+([A-Za-z0-9\s&.,'-]+?)(?:\s+(?:team|careers|hr|hiring)|\.|\n|,|<|$)/i.exec(fullText);
+  if (i2sMatch && isCleanCompany(i2sMatch[1])) {
+    return cleanEntityName(i2sMatch[1]);
+  }
+
+  // BCA Finance: "BCA Finance Rekrutmen"
+  if (/BCA\s*Finance/i.test(fullText)) {
+    return 'BCA Finance';
+  }
+
+  // LinkedIn specific Indonesian pattern:
   // "Andrian, lamaran Anda sudah dikirim ke Sinarmas World Academy"
   const sentMatch = /(?:lamaran Anda (?:sudah|telah) dikirim ke|dikirim ke|sent to|applied to)\s+([A-Za-z0-9\s&.,'-]+?)(?:\s+(?:untuk|sebagai|via|pada|team|careers|hr|telah|sudah|berhasil|\.|\n|,|$))/i.exec(fullText);
   if (sentMatch && isCleanCompany(sentMatch[1])) {
     return cleanEntityName(sentMatch[1]);
   }
 
-  // Priority 2: Pipe delimiter in subject: e.g. "Junior Developer | Sinarmas World Academy"
+  // JobStreet: "lamaranmu untuk posisi IT Support berhasil dikirimkan ke PT. [Company]"
+  const jsDikirimKe = /(?:berhasil dikirimkan ke|dikirimkan ke|dikirim ke)\s+([A-Za-z0-9\s&.,'-]+?)(?:\.|\n|,|<|$)/i.exec(fullText);
+  if (jsDikirimKe && isCleanCompany(jsDikirimKe[1])) {
+    return cleanEntityName(jsDikirimKe[1]);
+  }
+
+  // Pipe delimiter in subject: e.g. "Junior Developer | Sinarmas World Academy"
   const pipeMatch = /^(.*?)\s*\|\s*(.*)$/m.exec(subject);
   if (pipeMatch) {
     const p1 = pipeMatch[1].trim();
     const p2 = pipeMatch[2].trim();
     if (isCleanCompany(p2)) return cleanEntityName(p2);
-    if (isCleanCompany(p1) && !/developer|engineer|staff|specialist|analyst|designer|lamaran/i.test(p1)) {
+    if (isCleanCompany(p1) && !/developer|engineer|staff|specialist|analyst|designer|lamaran|support/i.test(p1)) {
       return cleanEntityName(p1);
     }
   }
 
-  // Priority 3: JobStreet explicit labels: "Perusahaan: [Name]" or "Company: [Name]"
+  // JobStreet explicit labels: "Perusahaan: [Name]" or "Company: [Name]"
   const labelMatch = /(?:Perusahaan|Company|Employer|Pemberi Kerja)\s*:\s*([A-Za-z0-9\s&.,'-]+?)(?:\n|\r|,|<|$)/i.exec(fullText);
   if (labelMatch && isCleanCompany(labelMatch[1])) {
     return cleanEntityName(labelMatch[1]);
   }
 
-  // Priority 4: JobStreet phrase: "Lamaranmu untuk [Posisi] di [Perusahaan] berhasil dikirim"
+  // JobStreet phrase: "Lamaranmu untuk [Posisi] di [Perusahaan] berhasil dikirim"
   const jsMatch = /(?:lamaran(?:mu| Anda)? (?:untuk|pada)\s+[^\n\r]+?\s+di)\s+([A-Za-z0-9\s&.,'-]+?)(?:\s+(?:berhasil|telah|sukses|terkirim)|\.|\n|,|<|$)/i.exec(fullText);
   if (jsMatch && isCleanCompany(jsMatch[1])) {
     return cleanEntityName(jsMatch[1]);
   }
 
-  // Priority 5: Pattern "PT [Name]"
-  const ptMatch = /(PT\s+[A-Za-z0-9\s&.,'-]+?)(?:\s+(?:membuka|mengundang|adalah|tbk|persero|\.|\n|,|<|$))/i.exec(fullText);
+  // Pattern "PT [Name]" or "PT. [Name]"
+  const ptMatch = /(PT\.?\s+[A-Za-z0-9\s&.,'-]+?)(?:\s+(?:membuka|mengundang|adalah|tbk|persero|\.|\n|,|<|$))/i.exec(fullText);
   if (ptMatch && isCleanCompany(ptMatch[1])) {
     return cleanEntityName(ptMatch[1]);
   }
 
-  // Priority 6: Standard "di [Company]" or "at [Company]"
+  // Standard "di [Company]" or "at [Company]"
   const atMatch = /(?:at|di|pada)\s+([A-Z][A-Za-z0-9\s&.,'-]+?)(?:\s+(?:for|sebagai|via|pada|team|careers|hr|telah|berhasil)|\.|\n|,|<|$)/i.exec(fullText);
   if (atMatch && isCleanCompany(atMatch[1])) {
     return cleanEntityName(atMatch[1]);
   }
 
-  // Priority 7: Sender domain e.g. "recruitment@shopee.co.id" -> Shopee
+  // Sender domain e.g. "recruitment@shopee.co.id" -> Shopee
   const domainMatch = /@([a-zA-Z0-9-]+)\.[a-zA-Z]{2,}/i.exec(sender);
-  if (domainMatch && domainMatch[1] && !/gmail|yahoo|outlook|linkedin|jobstreet|glints|greenhouse|lever/i.test(domainMatch[1])) {
+  if (domainMatch && domainMatch[1] && !/gmail|yahoo|outlook|linkedin|jobstreet|glints|greenhouse|lever|mailer/i.test(domainMatch[1])) {
     const domainName = domainMatch[1];
     if (isCleanCompany(domainName)) {
       return domainName.charAt(0).toUpperCase() + domainName.slice(1);
@@ -205,7 +244,19 @@ function extractCompanyName(subject, text, sender) {
 function extractJobPosition(subject, text) {
   const fullText = `${subject}\n${text}`;
 
-  // Priority 1: Explicit labels: "Posisi: [Name]" or "Position: [Name]" or "Role: [Name]"
+  // Kalibrr: "Application sent to Data Management Officer at Indonesia Stock Exchange!"
+  const kalibrrPos = /Application sent to ([A-Za-z0-9\s/&.,'-]+?)\s+at\s+/i.exec(fullText);
+  if (kalibrrPos && kalibrrPos[1] && kalibrrPos[1].trim().length > 2) {
+    return cleanEntityName(kalibrrPos[1]);
+  }
+
+  // JobStreet: "lamaranmu untuk posisi IT Support berhasil"
+  const jsPos = /(?:posisi|position|role)\s+([A-Za-z0-9\s/&.,'-]+?)\s+(?:berhasil|telah|sukses|terkirim|di|ke)/i.exec(fullText);
+  if (jsPos && jsPos[1] && jsPos[1].trim().length > 2) {
+    return cleanEntityName(jsPos[1]);
+  }
+
+  // Explicit labels: "Posisi: [Name]" or "Position: [Name]" or "Role: [Name]"
   const labelMatch = /(?:Posisi|Position|Role|Job Title|Pekerjaan)\s*:\s*([A-Za-z0-9\s/&.,'-]+?)(?:\n|\r|,|<|$)/i.exec(fullText);
   if (labelMatch && labelMatch[1] && labelMatch[1].trim().length > 2) {
     const cleaned = cleanEntityName(labelMatch[1]);
@@ -214,26 +265,28 @@ function extractJobPosition(subject, text) {
     }
   }
 
-  // Priority 2: Pipe delimiter "Junior Developer | Sinarmas World Academy"
+  // Pipe delimiter "Junior Developer | Sinarmas World Academy"
   const pipeMatch = /^(.*?)\s*\|\s*(.*)$/m.exec(subject);
   if (pipeMatch) {
     const p1 = pipeMatch[1].trim();
-    if (/developer|engineer|staff|specialist|analyst|designer|manager|programmer|junior|senior|intern/i.test(p1)) {
+    if (/developer|engineer|staff|specialist|analyst|designer|manager|programmer|junior|senior|intern|support|officer/i.test(p1)) {
       return cleanEntityName(p1);
     }
   }
 
-  // Priority 3: Pattern "Lamaran Anda untuk [Posisi] di [Perusahaan]"
+  // Pattern "Lamaran Anda untuk [Posisi] di [Perusahaan]"
   const untukMatch = /(?:lamaran(?: Anda|mu)? (?:untuk|pada)|melamar posisi)\s+([A-Za-z0-9\s/&.,'-]+?)\s+(?:di|pada|ke)\s+/i.exec(fullText);
   if (untukMatch && untukMatch[1] && untukMatch[1].trim().length > 2) {
-    const cleaned = cleanEntityName(untukMatch[1]);
-    if (!/perusahaan|company|jobstreet|linkedin/i.test(cleaned)) {
-      return cleaned;
-    }
+    return cleanEntityName(untukMatch[1]);
   }
 
-  // Priority 4: Standard role keyword scan
+  // Standard role keyword scan
   const roleKeywords = [
+    'Data Management Officer',
+    'IT Support Specialist',
+    'IT Staff Support',
+    'IT Support',
+    'IT Staff',
     'Junior Software Engineer',
     'Junior Developer',
     'Senior Software Engineer',
@@ -249,9 +302,6 @@ function extractJobPosition(subject, text) {
     'Web Developer',
     'Software Engineer',
     'Software Developer',
-    'IT Support Specialist',
-    'IT Support',
-    'IT Staff',
     'DevOps Engineer',
     'QA Engineer',
     'Quality Assurance',
@@ -272,13 +322,13 @@ function extractJobPosition(subject, text) {
     }
   }
 
-  // Priority 5: Pattern "posisi [Position]" or "role [Position]"
+  // Pattern "posisi [Position]" or "role [Position]"
   const posMatch = /(?:posisi|position|role|sebagai)\s+([A-Za-z0-9\s/]+?)(?:\s+(?:di|at|pada|ke|team|telah|berhasil|\.|\n|,))/i.exec(fullText);
   if (posMatch && posMatch[1] && posMatch[1].trim().length > 3) {
     return cleanEntityName(posMatch[1]);
   }
 
-  return 'Junior Developer';
+  return 'IT Support';
 }
 
 // Helper: Extract Date
@@ -335,10 +385,86 @@ function buildSummary(status, company, role, date) {
  */
 export const SAMPLE_JOB_EMAILS = [
   {
+    id: 'sample_kalibrr_idx',
+    label: '1. Kalibrr: Indonesia Stock Exchange (Data Management Officer)',
+    platform: 'Kalibrr',
+    sender: 'Talent Acquisition Team <notifications@kalibrr.com>',
+    subject: 'Application sent to Data Management Officer at Indonesia Stock Exchange!',
+    body: `Hi Andrian,
+
+Your application for the position Data Management Officer at Indonesia Stock Exchange has been successfully submitted via Kalibrr!
+
+Application Details:
+- Role: Data Management Officer
+- Employer: Indonesia Stock Exchange (PT Bursa Efek Indonesia)
+- Location: Jakarta, Indonesia (Hybrid / On-site)
+- Submitted: Today
+
+The talent acquisition team will review your qualifications. We will notify you once there is an update on your application.
+
+Best regards,
+Kalibrr Talent Team`
+  },
+  {
+    id: 'sample_i2s_istidata',
+    label: '2. I2S Mailer: PT. Istidata Indopacific Solution Center (IT Support)',
+    platform: 'I2S Mailer',
+    sender: 'I2S Mailer <noreply@istidata.co.id>',
+    subject: 'Thanks for submitting your application for a job at PT. Istidata Indopacific Solution Center',
+    body: `Dear Andrian,
+
+Thanks for submitting your application for a job at PT. Istidata Indopacific Solution Center.
+
+Position Applied: IT Support Specialist
+Department: Technical Infrastructure & Support
+Office: Wisma Istidata, Jakarta
+
+We have received your resume and our recruitment team is currently reviewing your profile against our current opening. If your profile matches our requirements, we will contact you for the next interview stage.
+
+Sincerely,
+Recruitment Team
+PT. Istidata Indopacific Solution Center`
+  },
+  {
+    id: 'sample_bca_finance',
+    label: '3. BCA Finance: Rekrutmen Staff',
+    platform: 'BCA Finance',
+    sender: 'BCA Finance <rekrutmen@bcafinance.co.id>',
+    subject: 'BCA Finance Rekrutmen - Konfirmasi Lamaran',
+    body: `Haii Andrian,
+
+Terima kasih atas ketertarikan kamu bergabung bersama BCA Finance.
+
+Lamaran kamu untuk posisi IT Staff di BCA Finance telah kami terima di dalam sistem e-Recruitment BCA Finance. Data diri dan portfolio kamu akan segera diverifikasi oleh tim Human Capital.
+
+Pantau terus email kamu untuk informasi jadwal seleksi atau psikotes berikutnya.
+
+Salam hangat,
+HC Recruitment BCA Finance`
+  },
+  {
+    id: 'sample_jobstreet_itsupport',
+    label: '4. JobStreet: IT Support (Lamaran Berhasil Dikirim)',
+    platform: 'JobStreet',
+    sender: 'Lamaran Jobstreet <noreply@jobstreet.com>',
+    subject: 'Lamaranmu berhasil dikirim - IT Support',
+    body: `Hai Andrian,
+
+Lamaranmu untuk posisi IT Support berhasil dikirimkan ke PT. Global Solusi Teknologi melalui JobStreet.
+
+Ringkasan:
+- Posisi: IT Support
+- Perusahaan: PT. Global Solusi Teknologi
+- Status: Berhasil dikirimkan ke perekrut
+
+Semoga berhasil dalam proses seleksi!
+JobStreet by SEEK`
+  },
+  {
     id: 'sample_linkedin_sinarmas',
-    label: '1. LinkedIn: Sinarmas World Academy (Junior Developer)',
+    label: '5. LinkedIn: Sinarmas World Academy (Junior Developer)',
     platform: 'LinkedIn',
-    sender: 'jobs-noreply@linkedin.com',
+    sender: 'LinkedIn Jobs <jobs-noreply@linkedin.com>',
     subject: 'Andrian, lamaran Anda sudah dikirim ke Sinarmas World Academy',
     body: `Hi Andrian,
 
@@ -356,28 +482,8 @@ Salam hangat,
 Tim LinkedIn Jobs`
   },
   {
-    id: 'sample_jobstreet_mandiri',
-    label: '2. JobStreet: Bank Mandiri (React Specialist)',
-    platform: 'JobStreet',
-    sender: 'noreply@jobstreet.com',
-    subject: 'Lamaran terkirim | Jobstreet - PT Bank Mandiri (Persero) Tbk',
-    body: `Halo Andrian,
-
-Lamaranmu untuk posisi React Specialist di PT Bank Mandiri (Persero) Tbk berhasil dikirim melalui JobStreet.
-
-Informasi Lamaran:
-Perusahaan: PT Bank Mandiri (Persero) Tbk
-Posisi: React Specialist
-Status: Terkirim ke Rekruter
-
-Pemberi kerja akan meninjau kualifikasi dan resume Anda. Pantau terus status lamaran Anda di JobStreet.
-
-Salam sukses,
-Jobstreet by SEEK`
-  },
-  {
     id: 'sample_interview_shopee',
-    label: '3. Undangan Interview: PT Shopee International',
+    label: '6. Undangan Interview: PT Shopee International',
     platform: 'Direct HR Email',
     sender: 'recruitment@shopee.co.id',
     subject: 'Undangan Interview User - Frontend Developer (PT Shopee International Indonesia)',
@@ -397,46 +503,6 @@ Mohon konfirmasi kehadiran Anda dengan membalas email ini.
 Best regards,
 Talent Acquisition Team
 PT Shopee International Indonesia`
-  },
-  {
-    id: 'sample_rejection_bukalapak',
-    label: '4. Status Update: Bukalapak (Ditolak)',
-    platform: 'Direct HR Email',
-    sender: 'talent@bukalapak.com',
-    subject: 'Update Regarding Your Application at Bukalapak - Software Engineer',
-    body: `Hi Andrian,
-
-Thank you for taking the time to speak with our engineering team regarding the Software Engineer position at Bukalapak.
-
-Unfortunately, after careful consideration, we have decided to pursue other candidates whose experience more closely matches the specific requirements for this role at this time.
-
-We truly appreciate the time and effort you invested in our process.
-
-Warm regards,
-Bukalapak People Team`
-  },
-  {
-    id: 'sample_offer_mandiri',
-    label: '5. Official Job Offer: Bank Mandiri (Diterima)',
-    platform: 'Direct HR Email',
-    sender: 'hr-offers@bankmandiri.co.id',
-    subject: 'Job Offer & Offering Letter - React Specialist (PT Bank Mandiri)',
-    body: `Selamat siang Andrian,
-
-Congratulations!
-
-Kami dengan senang hati menyampaikan bahwa Anda dinyatakan LULUS dari seluruh rangkaian proses seleksi posisi React Specialist di PT Bank Mandiri (Persero) Tbk.
-
-Bersama ini kami lampirkan Official Offering Letter dengan detail kompensasi dan benefit:
-- Position: React Specialist
-- Base Salary: Rp 18.500.000 / bulan + Tunjangan & Asuransi
-- Start Date: 01 Oktober 2026
-
-Selamat bergabung di keluarga besar Bank Mandiri!
-
-Salam hangat,
-Human Capital Group
-PT Bank Mandiri (Persero) Tbk`
   }
 ];
 
@@ -506,11 +572,12 @@ function extractEmailBodyText(payload) {
  */
 export async function fetchGmailMessages(accessToken) {
   try {
+    // Broad search query to capture ALL job emails (Kalibrr, I2S Mailer, BCA Finance, JobStreet, LinkedIn, Glints, Dealls, etc.)
     const q = encodeURIComponent(
-      'from:(linkedin OR jobstreet OR glints OR greenhouse OR lever) (application OR interview OR applied OR "thank you for applying" OR lamaran OR dikirim)'
+      '(subject:(lamaran OR application OR applied OR rekrutmen OR interview OR wawancara OR "submitting your application" OR "thank you for applying" OR "terima kasih" OR "application sent" OR "telah dikirim" OR "berhasil dikirim" OR "job at") OR from:(jobstreet OR linkedin OR kalibrr OR glints OR dealls OR greenhouse OR lever OR workday OR recruit OR talent OR mailer OR hrd OR bca OR istidata OR i2s))'
     );
     const listRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=${q}`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=30&q=${q}`,
       {
         headers: { Authorization: `Bearer ${accessToken}` }
       }
@@ -525,8 +592,8 @@ export async function fetchGmailMessages(accessToken) {
       return [];
     }
 
-    // Fetch individual messages details
-    const messagePromises = listData.messages.slice(0, 8).map(async (msg) => {
+    // Fetch individual messages details (up to 25 messages)
+    const messagePromises = listData.messages.slice(0, 25).map(async (msg) => {
       const detailRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}`,
         {

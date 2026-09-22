@@ -470,3 +470,85 @@ export function markEmailAsSynced(userId, emailId) {
   }
   return current;
 }
+
+// Multi-Device Instant Sync Code (Laptop <-> Phone)
+export function generateSyncCode(userId) {
+  try {
+    const users = getUsers();
+    const user = users.find((u) => u.id === userId);
+    if (!user) return null;
+
+    const apps = getApplications(userId);
+    const events = getEvents(userId);
+    const reminders = getReminders(userId);
+    const history = getStatusHistory(userId);
+    const syncedEmails = getSyncedEmailIds(userId);
+
+    const payload = {
+      v: 1,
+      ts: Date.now(),
+      user,
+      apps,
+      events,
+      reminders,
+      history,
+      syncedEmails
+    };
+
+    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  } catch (err) {
+    console.error('Failed to generate sync code:', err);
+    return null;
+  }
+}
+
+export function importSyncCode(syncCode) {
+  try {
+    if (!syncCode || typeof syncCode !== 'string') {
+      return { success: false, message: 'Kode sinkronisasi kosong.' };
+    }
+    const jsonStr = decodeURIComponent(escape(atob(syncCode.trim())));
+    const payload = JSON.parse(jsonStr);
+
+    if (!payload.user || !payload.user.id || !payload.user.email) {
+      return { success: false, message: 'Format kode sinkronisasi tidak valid atau korup.' };
+    }
+
+    const incomingUser = payload.user;
+    let users = getUsers();
+    const existingIndex = users.findIndex(
+      (u) => u.id === incomingUser.id || u.email.toLowerCase() === incomingUser.email.toLowerCase()
+    );
+
+    if (existingIndex !== -1) {
+      users[existingIndex] = { ...users[existingIndex], ...incomingUser };
+    } else {
+      users.push(incomingUser);
+    }
+
+    localStorage.setItem(KEYS.USERS, JSON.stringify(users));
+    setCurrentUser(incomingUser.id);
+
+    if (Array.isArray(payload.apps)) {
+      localStorage.setItem(getAppsKey(incomingUser.id), JSON.stringify(payload.apps));
+    }
+    if (Array.isArray(payload.events)) {
+      localStorage.setItem(getEventsKey(incomingUser.id), JSON.stringify(payload.events));
+    }
+    if (Array.isArray(payload.reminders)) {
+      localStorage.setItem(getRemindersKey(incomingUser.id), JSON.stringify(payload.reminders));
+    }
+    if (Array.isArray(payload.history)) {
+      localStorage.setItem(getHistoryKey(incomingUser.id), JSON.stringify(payload.history));
+    }
+    if (Array.isArray(payload.syncedEmails)) {
+      localStorage.setItem(getSyncedEmailsKey(incomingUser.id), JSON.stringify(payload.syncedEmails));
+    }
+
+    return { success: true, user: incomingUser, count: payload.apps?.length || 0 };
+  } catch (err) {
+    console.error('Failed to import sync code:', err);
+    return { success: false, message: 'Gagal mengimpor kode sinkronisasi: Pastikan seluruh kode tersalin dengan benar.' };
+  }
+}
+

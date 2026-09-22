@@ -17,7 +17,7 @@ import { useAuth } from '../../context/AuthContext';
 import VideoBackground from './VideoBackground';
 
 export default function AuthModal({ onBackToLanding }) {
-  const { login, register } = useAuth();
+  const { login, register, loginWithSyncCode } = useAuth();
 
   const [mode, setMode] = useState('login'); // 'login' | 'register' | 'forgot'
   const [showPassword, setShowPassword] = useState(false);
@@ -252,6 +252,41 @@ export default function AuthModal({ onBackToLanding }) {
                 </>
               )}
             </button>
+
+            {/* Mobile Sync Code Direct Quick Login */}
+            {mode === 'login' && (
+              <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)', textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const code = prompt('📱 Buka di HP? Masukkan Kode Sinkronisasi dari Laptop kamu:');
+                    if (code && code.trim()) {
+                      const res = loginWithSyncCode(code.trim());
+                      if (res && res.success) {
+                        alert(`Berhasil masuk sebagai ${res.user.name}! Seluruh data lamaran kamu telah disinkronkan.`);
+                      } else {
+                        alert(res?.message || 'Kode sinkronisasi tidak valid.');
+                      }
+                    }
+                  }}
+                  style={{
+                    background: 'none',
+                    border: '1px dashed var(--border-medium)',
+                    color: 'var(--primary)',
+                    padding: '0.45rem 0.85rem',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    fontWeight: 600
+                  }}
+                >
+                  <span>📱 Buka dari HP? Masuk via Kode Sync Laptop</span>
+                </button>
+              </div>
+            )}
           </form>
         </div>
 

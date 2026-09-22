@@ -4,7 +4,8 @@ import {
   loginUser,
   registerUser,
   setCurrentUser,
-  updateUserProfile
+  updateUserProfile,
+  importSyncCode
 } from '../services/storageService';
 
 const AuthContext = createContext();
@@ -30,6 +31,15 @@ export function AuthProvider({ children }) {
 
   const register = (name, email, password) => {
     const res = registerUser(name, email, password);
+    if (res.success) {
+      setUser(res.user);
+      setIsAuthenticated(true);
+    }
+    return res;
+  };
+
+  const loginWithSyncCode = (syncCode) => {
+    const res = importSyncCode(syncCode);
     if (res.success) {
       setUser(res.user);
       setIsAuthenticated(true);
@@ -65,6 +75,7 @@ export function AuthProvider({ children }) {
         isAuthenticated,
         login,
         register,
+        loginWithSyncCode,
         logout,
         switchUser,
         updateProfile
