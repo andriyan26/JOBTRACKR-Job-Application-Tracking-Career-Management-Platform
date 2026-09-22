@@ -34,6 +34,14 @@ function getRemindersKey(userId) {
   return `jobtrackr_reminders_${userId}`;
 }
 
+function getNotificationsKey(userId) {
+  return `jobtrackr_notifications_${userId}`;
+}
+
+function getGmailConfigKey(userId) {
+  return `jobtrackr_gmail_config_${userId}`;
+}
+
 // Initialize seed data if not present
 export function initializeStorage() {
   try {
@@ -356,4 +364,83 @@ export function getStoredTheme() {
 
 export function setStoredTheme(theme) {
   localStorage.setItem(KEYS.THEME, theme);
+}
+
+// In-app Notifications
+export function getNotifications(userId) {
+  try {
+    const raw = localStorage.getItem(getNotificationsKey(userId));
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addNotification(userId, notifData) {
+  const notifs = getNotifications(userId);
+  const newNotif = {
+    id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+    title: notifData.title,
+    message: notifData.message,
+    type: notifData.type || 'info', // 'success', 'warning', 'info', 'interview', 'rejection'
+    source: notifData.source || 'gmail',
+    read: false,
+    created_at: new Date().toISOString(),
+    link_app_id: notifData.link_app_id || null
+  };
+  notifs.unshift(newNotif);
+  // Keep latest 30 notifications
+  const trimmed = notifs.slice(0, 30);
+  localStorage.setItem(getNotificationsKey(userId), JSON.stringify(trimmed));
+  return newNotif;
+}
+
+export function markNotificationRead(userId, notifId) {
+  const notifs = getNotifications(userId);
+  const updated = notifs.map((n) => (n.id === notifId ? { ...n, read: true } : n));
+  localStorage.setItem(getNotificationsKey(userId), JSON.stringify(updated));
+  return updated;
+}
+
+export function clearNotifications(userId) {
+  localStorage.setItem(getNotificationsKey(userId), JSON.stringify([]));
+  return [];
+}
+
+const DEFAULT_OAUTH_CLIENT_ID = '799731913117-eropponv0doam15k4hultsgkdrhs92ld.apps.googleusercontent.com';
+
+// Gmail Sync Configuration
+export function getGmailConfig(userId) {
+  try {
+    const raw = localStorage.getItem(getGmailConfigKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (!parsed.clientId) parsed.clientId = DEFAULT_OAUTH_CLIENT_ID;
+      return parsed;
+    }
+    return {
+      connected: true,
+      email: 'andriyan@gmail.com',
+      clientId: DEFAULT_OAUTH_CLIENT_ID,
+      autoSync: true,
+      lastSyncedAt: null,
+      syncCount: 0
+    };
+  } catch {
+    return {
+      connected: true,
+      email: 'andriyan@gmail.com',
+      clientId: DEFAULT_OAUTH_CLIENT_ID,
+      autoSync: true,
+      lastSyncedAt: null,
+      syncCount: 0
+    };
+  }
+}
+
+export function saveGmailConfig(userId, configData) {
+  const current = getGmailConfig(userId);
+  const updated = { ...current, ...configData };
+  localStorage.setItem(getGmailConfigKey(userId), JSON.stringify(updated));
+  return updated;
 }

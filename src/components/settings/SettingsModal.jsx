@@ -9,13 +9,14 @@ import {
   Save,
   Check,
   Briefcase,
+  Mail,
   Settings as SettingsIcon
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useJob } from '../../context/JobContext';
 
-export default function SettingsModal({ isOpen, onClose }) {
+export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
   const { currentUser, updateProfile } = useAuth();
   const { theme, setTheme } = useTheme();
   const { resetAllData, applications } = useJob();
@@ -166,6 +167,29 @@ export default function SettingsModal({ isOpen, onClose }) {
               >
                 <Sun size={16} />
                 <span>Light Professional</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Gmail & Inbound Sync Integration */}
+          <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+              <div>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                  Gmail & Email Auto-Sync
+                </h4>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0.2rem 0 0' }}>
+                  Auto-detect new job applications & status updates from LinkedIn, JobStreet & recruiters.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-dash-action primary"
+                onClick={onOpenGmailSync}
+                style={{ padding: '0.5rem 0.95rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+              >
+                <Mail size={15} />
+                <span>Open Gmail Sync Hub</span>
               </button>
             </div>
           </div>

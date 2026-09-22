@@ -8,6 +8,7 @@ export default function Layout({
   activeTab,
   onNavigate,
   onOpenSettings,
+  onOpenGmailSync,
   onSelectApp
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -28,6 +29,7 @@ export default function Layout({
           activeTab={activeTab}
           onNavigate={onNavigate}
           onOpenSettings={onOpenSettings}
+          onOpenGmailSync={onOpenGmailSync}
           onSelectApp={onSelectApp}
         />
 

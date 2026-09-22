@@ -11,16 +11,25 @@ import {
   Clock,
   Calendar,
   AlertCircle,
-  Briefcase
+  Briefcase,
+  Mail,
+  Sparkles,
+  CheckCheck
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useJob } from '../../context/JobContext';
 import { useTheme } from '../../context/ThemeContext';
 import { formatRelativeDate } from '../../services/dateUtils';
 
-export default function TopNavbar({ activeTab, onNavigate, onOpenSettings, onSelectApp }) {
+export default function TopNavbar({ activeTab, onNavigate, onOpenSettings, onOpenGmailSync, onSelectApp }) {
   const { currentUser, logout } = useAuth();
-  const { stats, markAppFollowedUp } = useJob();
+  const {
+    stats,
+    notifications,
+    markNotificationAsRead,
+    clearAllNotifications,
+    applications
+  } = useJob();
   const { theme, toggleTheme } = useTheme();
 
   const [showNotifMenu, setShowNotifMenu] = useState(false);
@@ -43,7 +52,10 @@ export default function TopNavbar({ activeTab, onNavigate, onOpenSettings, onSel
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const attentionCount = stats.attentionList.length + stats.upcomingInterviews.length;
+  const totalNotifCount =
+    stats.attentionList.length +
+    stats.upcomingInterviews.length +
+    (stats.unreadNotificationsCount || 0);
 
   const getPageTitle = () => {
     switch (activeTab) {
@@ -76,8 +88,19 @@ export default function TopNavbar({ activeTab, onNavigate, onOpenSettings, onSel
         </div>
       </div>
 
-      {/* Right: Theme Switcher, Settings, Notifications & Profile */}
+      {/* Right: Gmail Sync, Theme Switcher, Settings, Notifications & Profile */}
       <div className="navbar-right">
+        {/* Smart Gmail Sync Quick Action */}
+        <button
+          className="sync-top-nav-btn"
+          onClick={onOpenGmailSync}
+          title="Smart Gmail Sync & AI Job Scanner"
+        >
+          <span className="sync-dot"></span>
+          <Mail size={15} />
+          <span>Sync Gmail</span>
+        </button>
+
         {/* Settings Button directly in Top Bar (User requirement: Setting di bagian atas aja) */}
         <button
           className="icon-action-btn"
@@ -104,27 +127,86 @@ export default function TopNavbar({ activeTab, onNavigate, onOpenSettings, onSel
             title="Notifications & Action Items"
           >
             <Bell size={18} />
-            {attentionCount > 0 && (
-              <span className="notif-badge-count">{attentionCount}</span>
+            {totalNotifCount > 0 && (
+              <span className="notif-badge-count">{totalNotifCount}</span>
             )}
           </button>
 
           {showNotifMenu && (
             <div className="notif-dropdown">
               <div className="notif-header">
-                <h4>Needs Attention & Alerts</h4>
-                <span className="season-pill" style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
-                  {attentionCount} Action Items
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <h4>Alerts & Email Sync</h4>
+                  <span className="season-pill" style={{ color: '#38bdf8', borderColor: 'rgba(56, 189, 248, 0.3)' }}>
+                    {totalNotifCount} Items
+                  </span>
+                </div>
+                {notifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllNotifications}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '0.72rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                    title="Clear All Notifications"
+                  >
+                    <CheckCheck size={14} />
+                    <span>Clear</span>
+                  </button>
+                )}
               </div>
 
               <div className="notif-list">
-                {attentionCount === 0 ? (
+                {totalNotifCount === 0 ? (
                   <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    ✓ All caught up! No urgent follow-ups required.
+                    ✓ All caught up! No urgent updates or unread sync items.
                   </div>
                 ) : (
                   <>
+                    {/* Synced in-app Gmail notifications */}
+                    {notifications.map((notif) => (
+                      <div
+                        key={notif.id}
+                        className="notif-item"
+                        style={{ background: notif.read ? 'transparent' : 'rgba(37, 99, 235, 0.08)' }}
+                        onClick={() => {
+                          markNotificationAsRead(notif.id);
+                          if (notif.link_app_id) {
+                            const app = applications.find((a) => a.id === notif.link_app_id);
+                            if (app) {
+                              setShowNotifMenu(false);
+                              onSelectApp(app);
+                            }
+                          }
+                        }}
+                      >
+                        <div
+                          className="notif-icon-box"
+                          style={{
+                            background:
+                              notif.type === 'interview'
+                                ? 'rgba(245, 158, 11, 0.15)'
+                                : notif.type === 'rejection'
+                                ? 'rgba(239, 68, 68, 0.15)'
+                                : 'rgba(16, 185, 129, 0.15)',
+                            color:
+                              notif.type === 'interview'
+                                ? '#f59e0b'
+                                : notif.type === 'rejection'
+                                ? '#ef4444'
+                                : '#10b981'
+                          }}
+                        >
+                          <Mail size={16} />
+                        </div>
+                        <div className="notif-content">
+                          <div className="notif-title">{notif.title}</div>
+                          <div className="notif-desc">{notif.message}</div>
+                          <div className="notif-time">
+                            {formatRelativeDate(notif.created_at)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
                     {/* Attention / Follow-up list */}
                     {stats.attentionList.map((app) => (
                       <div

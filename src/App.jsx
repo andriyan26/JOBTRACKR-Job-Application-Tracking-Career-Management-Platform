@@ -8,6 +8,7 @@ import ApplicationsView from './components/applications/ApplicationsView';
 import CalendarView from './components/calendar/CalendarView';
 import AnalyticsView from './components/analytics/AnalyticsView';
 import SettingsModal from './components/settings/SettingsModal';
+import GmailSyncModal from './components/gmail/GmailSyncModal';
 import LandingPage from './components/landing/LandingPage';
 import AuthModal from './components/auth/AuthModal';
 import RemindersModal from './components/reminders/RemindersModal';
@@ -21,6 +22,7 @@ import './styles/applications.css';
 import './styles/calendar.css';
 import './styles/analytics.css';
 import './styles/landing.css';
+import './styles/gmail.css';
 
 function MainApp() {
   const { isAuthenticated } = useAuth();
@@ -33,6 +35,7 @@ function MainApp() {
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
+  const [isGmailSyncOpen, setIsGmailSyncOpen] = useState(false);
 
   // Landing / Auth navigation state
   const [showAuthScreen, setShowAuthScreen] = useState(false);
@@ -70,6 +73,7 @@ function MainApp() {
       activeTab={activeTab}
       onNavigate={handleNavigate}
       onOpenSettings={() => setIsSettingsOpen(true)}
+      onOpenGmailSync={() => setIsGmailSyncOpen(true)}
       onSelectApp={(app) => {
         setSelectedApp(app);
         setActiveTab('applications');
@@ -115,6 +119,18 @@ function MainApp() {
         <SettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
+          onOpenGmailSync={() => {
+            setIsSettingsOpen(false);
+            setIsGmailSyncOpen(true);
+          }}
+        />
+      )}
+
+      {/* Smart Gmail Sync & AI Job Scanner Modal */}
+      {isGmailSyncOpen && (
+        <GmailSyncModal
+          isOpen={isGmailSyncOpen}
+          onClose={() => setIsGmailSyncOpen(false)}
         />
       )}
 

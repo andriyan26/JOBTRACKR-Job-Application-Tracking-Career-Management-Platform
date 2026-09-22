@@ -13,9 +13,15 @@ import {
   toggleReminder,
   deleteReminder,
   markFollowedUp,
-  resetDemoData
+  resetDemoData,
+  getNotifications,
+  addNotification as saveNotif,
+  markNotificationRead as markNotifRead,
+  clearNotifications as clearNotifs,
+  getGmailConfig,
+  saveGmailConfig
 } from '../services/storageService';
-import { needsFollowUp, getDaysDifference } from '../services/dateUtils';
+import { needsFollowUp, getDaysDifference, getTodayString } from '../services/dateUtils';
 import confetti from 'canvas-confetti';
 
 const JobContext = createContext();
@@ -28,6 +34,8 @@ export function JobProvider({ children }) {
   const [statusHistory, setStatusHistory] = useState([]);
   const [applicationEvents, setApplicationEvents] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [gmailConfig, setGmailConfig] = useState({ connected: false, email: '', clientId: '', autoSync: true });
   const [loading, setLoading] = useState(true);
 
   // Load all user records
@@ -46,11 +54,15 @@ export function JobProvider({ children }) {
     const history = getStatusHistory(userId);
     const events = getApplicationEvents(userId);
     const rems = getReminders(userId);
+    const notifs = getNotifications(userId);
+    const gConfig = getGmailConfig(userId);
 
     setApplications(apps);
     setStatusHistory(history);
     setApplicationEvents(events);
     setReminders(rems);
+    setNotifications(notifs);
+    setGmailConfig(gConfig);
     setLoading(false);
   };
 
@@ -192,6 +204,8 @@ export function JobProvider({ children }) {
       return diff <= 0 && diff >= -14; // upcoming in next 14 days
     });
 
+    const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
+
     return {
       total,
       interview,
@@ -203,9 +217,107 @@ export function JobProvider({ children }) {
       interviewRate,
       responseRate,
       attentionList,
-      upcomingInterviews
+      upcomingInterviews,
+      unreadNotificationsCount
     };
-  }, [applications, applicationEvents]);
+  }, [applications, applicationEvents, notifications]);
+
+  // Notifications API
+  const pushNotification = (notifData) => {
+    if (!userId) return null;
+    const item = saveNotif(userId, notifData);
+    setNotifications(getNotifications(userId));
+    return item;
+  };
+
+  const markNotificationAsRead = (notifId) => {
+    if (!userId) return;
+    const updated = markNotifRead(userId, notifId);
+    setNotifications(updated);
+  };
+
+  const clearAllNotifications = () => {
+    if (!userId) return;
+    clearNotifs(userId);
+    setNotifications([]);
+  };
+
+  const updateGmailConfiguration = (configData) => {
+    if (!userId) return null;
+    const updated = saveGmailConfig(userId, configData);
+    setGmailConfig(updated);
+    return updated;
+  };
+
+  // Smart Sync orchestration: Takes parsed email metadata and auto-creates or auto-updates
+  const syncParsedJobEmail = (parsed) => {
+    if (!userId) return null;
+
+    // Look for existing application with fuzzy company match
+    const existing = applications.find((a) => {
+      const aName = a.company_name.toLowerCase().replace(/pt|tbk|inc|\.|\s/g, '');
+      const pName = parsed.company_name.toLowerCase().replace(/pt|tbk|inc|\.|\s/g, '');
+      return aName.includes(pName) || pName.includes(aName);
+    });
+
+    if (existing) {
+      // Auto-update existing application
+      const updated = changeStatus(existing.id, parsed.current_status, parsed.summary);
+
+      if (parsed.current_status === 'Interview' && parsed.interview_date) {
+        addEvent(existing.id, {
+          event_type: 'Interview',
+          event_date: parsed.interview_date,
+          title: `Interview: ${existing.company_name}`,
+          description: parsed.summary
+        });
+      }
+
+      pushNotification({
+        title: `📧 Status Updated: ${existing.company_name}`,
+        message: `Application status auto-updated to "${parsed.current_status}" via Gmail sync.`,
+        type: parsed.current_status.toLowerCase(),
+        source: 'gmail',
+        link_app_id: existing.id
+      });
+
+      return { action: 'updated', application: updated };
+    } else {
+      // Auto-create new application
+      const newAppData = {
+        company_name: parsed.company_name,
+        position: parsed.position,
+        applied_via: parsed.applied_via || 'LinkedIn',
+        current_status: parsed.current_status || 'Applied',
+        work_mode: parsed.work_mode || 'Remote',
+        location: 'Indonesia',
+        salary_range: 'Competitive',
+        application_date: getTodayString(),
+        notes: `Automatically imported via Smart Gmail Sync.\n${parsed.summary}`
+      };
+
+      const created = addApplication(newAppData);
+
+      if (parsed.current_status === 'Interview' && parsed.interview_date) {
+        addEvent(created.id, {
+          event_type: 'Interview',
+          event_date: parsed.interview_date,
+          title: `Interview: ${created.company_name}`,
+          description: parsed.summary
+        });
+      }
+
+      pushNotification({
+        title: `✨ New Application Auto-Added: ${created.company_name}`,
+        message: `Detected ${created.position} via ${created.applied_via}. Added to your tracker without manual input!`,
+        type: 'success',
+        source: 'gmail',
+        link_app_id: created.id
+      });
+
+      return { action: 'created', application: created };
+    }
+  };
 
   return (
     <JobContext.Provider
@@ -214,6 +326,8 @@ export function JobProvider({ children }) {
         statusHistory,
         applicationEvents,
         reminders,
+        notifications,
+        gmailConfig,
         stats,
         loading,
         addApplication,
@@ -225,6 +339,11 @@ export function JobProvider({ children }) {
         addReminder,
         toggleReminderState,
         removeReminder,
+        pushNotification,
+        markNotificationAsRead,
+        clearAllNotifications,
+        updateGmailConfiguration,
+        syncParsedJobEmail,
         resetAllData,
         refreshData
       }}
