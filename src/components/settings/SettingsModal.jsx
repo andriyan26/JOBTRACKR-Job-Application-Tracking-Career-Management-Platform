@@ -129,33 +129,116 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
   };
 
   const handleGenerateSyncCode = () => {
-    if (!currentUser?.id) return;
-    const code = generateSyncCode(currentUser.id);
-    if (code) {
-      setSyncCode(code);
-      setCopiedSyncCode(false);
+    try {
+      const targetUser = currentUser || {
+        id: 'usr_andrian_live',
+        name: name || 'Andrian',
+        email: 'andriandowehz123@gmail.com',
+        role_title: roleTitle || 'Job Seeker',
+        location: location || 'Indonesia',
+        target_salary: targetSalary || '15.000.000 - 25.000.000 IDR',
+        avatar: avatar
+      };
+
+      const code = generateSyncCode(targetUser);
+      if (code) {
+        setSyncCode(code);
+        setCopiedSyncCode(true);
+
+        // Auto copy to clipboard
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code).catch(() => {});
+        }
+        setTimeout(() => setCopiedSyncCode(false), 4000);
+      } else {
+        alert('Gagal menghasilkan kode sinkronisasi. Coba lagi.');
+      }
+    } catch (err) {
+      console.error('Error generating sync code:', err);
+      alert('Terjadi kesalahan: ' + err.message);
     }
   };
 
   const handleCopySyncCode = () => {
     if (!syncCode) return;
-    navigator.clipboard.writeText(syncCode);
-    setCopiedSyncCode(true);
-    setTimeout(() => setCopiedSyncCode(false), 2500);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(syncCode).then(() => {
+          setCopiedSyncCode(true);
+          setTimeout(() => setCopiedSyncCode(false), 3000);
+        }).catch(() => {
+          prompt('Salin Kode Sinkronisasi di bawah ini:', syncCode);
+        });
+      } else {
+        prompt('Salin Kode Sinkronisasi di bawah ini:', syncCode);
+      }
+    } catch {
+      prompt('Salin Kode Sinkronisasi di bawah ini:', syncCode);
+    }
   };
 
   const handleImportSyncCode = (e) => {
     e.preventDefault();
-    if (!importCodeInput.trim()) return;
+    if (!importCodeInput.trim()) {
+      setImportStatus({ type: 'error', text: '⚠️ Silakan masukkan atau tempelkan kode sinkronisasi terlebih dahulu!' });
+      return;
+    }
     const res = loginWithSyncCode(importCodeInput.trim());
-    if (res.success) {
-      setImportStatus({ type: 'success', text: `Berhasil! Akun ${res.user.name} & ${res.count} lamaran tersinkronisasi!` });
+    if (res && res.success) {
+      setImportStatus({ type: 'success', text: `✓ Berhasil! Akun ${res.user.name} & ${res.count} lamaran tersinkronisasi!` });
       setTimeout(() => {
         window.location.reload();
-      }, 1200);
+      }, 1000);
     } else {
-      setImportStatus({ type: 'error', text: res.message || 'Kode tidak valid.' });
+      setImportStatus({ type: 'error', text: res?.message || 'Kode sinkronisasi tidak valid atau tidak lengkap.' });
     }
+  };
+
+  // Direct file-based sync (Download / Upload JSON)
+  const syncFileInputRef = useRef(null);
+
+  const handleDownloadSyncFile = () => {
+    try {
+      const targetUser = currentUser || {
+        id: 'usr_andrian_live',
+        name: name || 'Andrian',
+        email: 'andriandowehz123@gmail.com',
+        role_title: roleTitle || 'Job Seeker',
+        location: location || 'Indonesia',
+        target_salary: targetSalary || '15.000.000 - 25.000.000 IDR',
+        avatar: avatar
+      };
+      const code = generateSyncCode(targetUser);
+      const dataStr = 'data:text/plain;charset=utf-8,' + encodeURIComponent(code);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute('href', dataStr);
+      downloadAnchor.setAttribute('download', `jobtrackr_sync_hp_${new Date().toISOString().slice(0, 10)}.txt`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      alert('✓ File kode sinkronisasi berhasil di-download! Kirim file ini ke HP kamu (misal via WhatsApp atau Email).');
+    } catch (err) {
+      alert('Gagal mendownload file: ' + err.message);
+    }
+  };
+
+  const handleUploadSyncFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target.result;
+      if (content && typeof content === 'string') {
+        const res = loginWithSyncCode(content.trim());
+        if (res && res.success) {
+          alert(`✓ Berhasil! Akun ${res.user.name} & ${res.count} lamaran tersinkronisasi dari file!`);
+          window.location.reload();
+        } else {
+          alert('Gagal membaca file sinkronisasi: ' + (res?.message || 'Format tidak cocok'));
+        }
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleExportData = () => {
@@ -410,10 +493,10 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
                 type="button"
                 className="btn-dash-action primary"
                 onClick={handleGenerateSyncCode}
-                style={{ padding: '0.5rem 0.95rem', fontSize: '0.8rem' }}
+                style={{ padding: '0.55rem 1.05rem', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
               >
-                <Smartphone size={14} />
-                <span>Buat Kode Sinkronisasi HP</span>
+                <Smartphone size={15} />
+                <span>{syncCode ? 'Perbarui Kode Sinkronisasi HP' : 'Buat Kode Sinkronisasi HP'}</span>
               </button>
 
               {syncCode && (
@@ -421,7 +504,7 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
                   type="button"
                   className="btn-dash-action"
                   onClick={handleCopySyncCode}
-                  style={{ padding: '0.5rem 0.95rem', fontSize: '0.8rem', color: copiedSyncCode ? '#10b981' : 'var(--text-primary)' }}
+                  style={{ padding: '0.55rem 0.95rem', fontSize: '0.82rem', color: copiedSyncCode ? '#10b981' : 'var(--text-primary)' }}
                 >
                   {copiedSyncCode ? <CheckCheck size={14} /> : <Copy size={14} />}
                   <span>{copiedSyncCode ? 'Tersalin ke Clipboard!' : 'Salin Kode'}</span>
@@ -430,7 +513,11 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
             </div>
 
             {syncCode && (
-              <div style={{ marginTop: '0.5rem' }}>
+              <div style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: 'rgba(16, 185, 129, 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                <div style={{ fontSize: '0.76rem', color: '#10b981', marginBottom: '0.4rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <Check size={15} />
+                  <span>Kode Sinkronisasi Siap Digunakan (Sudah Tersalin ke Clipboard!):</span>
+                </div>
                 <textarea
                   readOnly
                   value={syncCode}
@@ -443,13 +530,13 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
                     borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--border-medium)',
                     backgroundColor: 'var(--bg-surface)',
-                    color: 'var(--text-secondary)',
+                    color: 'var(--text-primary)',
                     resize: 'none'
                   }}
                   onClick={(e) => e.target.select()}
                 />
-                <div style={{ fontSize: '0.73rem', color: '#10b981', marginTop: '0.25rem', fontWeight: 600 }}>
-                  ✓ Buka https://jobtrackrandrian.tplp004.com/ di HP Anda ➔ Masuk via Kode Sync HP ➔ Tempel kode ini.
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                  👉 <strong>Langkah selanjutnya di HP:</strong> Buka <code>https://jobtrackrandrian.tplp004.com/</code> ➔ Di halaman Login, klik <strong>[📱 Buka dari HP? Masuk via Kode Sync]</strong> ➔ Tempel kode ini!
                 </div>
               </div>
             )}
@@ -487,6 +574,38 @@ export default function SettingsModal({ isOpen, onClose, onOpenGmailSync }) {
                   {importStatus.text}
                 </div>
               )}
+            </div>
+
+            {/* File-based sync alternative */}
+            <div style={{ marginTop: '0.75rem', paddingTop: '0.65rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Atau lewat file (Kirim via WhatsApp/Email ke HP):</span>
+              <button
+                type="button"
+                className="btn-dash-action"
+                onClick={handleDownloadSyncFile}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.73rem' }}
+                title="Download file sync untuk dikirim ke HP"
+              >
+                <Download size={13} />
+                <span>Download File Sync (.txt)</span>
+              </button>
+              <input
+                type="file"
+                ref={syncFileInputRef}
+                accept=".txt,.json"
+                style={{ display: 'none' }}
+                onChange={handleUploadSyncFile}
+              />
+              <button
+                type="button"
+                className="btn-dash-action"
+                onClick={() => syncFileInputRef.current?.click()}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.73rem' }}
+                title="Upload file sync di HP"
+              >
+                <Upload size={13} />
+                <span>Upload File Sync (.txt)</span>
+              </button>
             </div>
           </div>
 

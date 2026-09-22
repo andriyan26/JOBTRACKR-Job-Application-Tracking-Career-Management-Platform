@@ -76,9 +76,12 @@ export function initializeStorage() {
 export function getUsers() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEYS.USERS) || '[]');
-    return raw.filter((u) => u.id !== 'usr_andrian_01' && u.email !== 'andrian@jobtrackr.io');
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw;
+    }
+    return [INITIAL_USER];
   } catch {
-    return [];
+    return [INITIAL_USER];
   }
 }
 
@@ -86,7 +89,10 @@ export function getCurrentUser() {
   initializeStorage();
   const currentId = localStorage.getItem(KEYS.CURRENT_USER_ID);
   const users = getUsers();
-  return users.find((u) => u.id === currentId) || users[0] || null;
+  const found = users.find((u) => u.id === currentId);
+  if (found) return found;
+  if (users[0]) return users[0];
+  return INITIAL_USER;
 }
 
 export function setCurrentUser(userId) {
@@ -472,12 +478,22 @@ export function markEmailAsSynced(userId, emailId) {
 }
 
 // Multi-Device Instant Sync Code (Laptop <-> Phone)
-export function generateSyncCode(userId) {
+export function generateSyncCode(userOrId) {
   try {
-    const users = getUsers();
-    const user = users.find((u) => u.id === userId);
-    if (!user) return null;
+    let user = null;
+    if (userOrId && typeof userOrId === 'object' && userOrId.id) {
+      user = userOrId;
+    } else {
+      const targetId = typeof userOrId === 'string' ? userOrId : localStorage.getItem(KEYS.CURRENT_USER_ID);
+      const allUsers = getUsers();
+      user = allUsers.find((u) => u.id === targetId) || getCurrentUser();
+    }
 
+    if (!user) {
+      user = INITIAL_USER;
+    }
+
+    const userId = user.id;
     const apps = getApplications(userId);
     const events = getEvents(userId);
     const reminders = getReminders(userId);
@@ -488,36 +504,68 @@ export function generateSyncCode(userId) {
       v: 1,
       ts: Date.now(),
       user,
-      apps,
-      events,
-      reminders,
-      history,
-      syncedEmails
+      apps: apps || [],
+      events: events || [],
+      reminders: reminders || [],
+      history: history || [],
+      syncedEmails: syncedEmails || []
     };
 
-    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const jsonStr = JSON.stringify(payload);
+    // Safe UTF-8 Base64 Encoding
+    try {
+      return window.btoa(encodeURIComponent(jsonStr).replace(/%([0-9A-F]{2})/g, (match, p1) => {
+        return String.fromCharCode('0x' + p1);
+      }));
+    } catch {
+      return window.btoa(unescape(encodeURIComponent(jsonStr)));
+    }
   } catch (err) {
     console.error('Failed to generate sync code:', err);
-    return null;
+    try {
+      return window.btoa(JSON.stringify({ v: 1, user: INITIAL_USER, apps: [] }));
+    } catch {
+      return null;
+    }
   }
 }
 
 export function importSyncCode(syncCode) {
   try {
-    if (!syncCode || typeof syncCode !== 'string') {
-      return { success: false, message: 'Kode sinkronisasi kosong.' };
+    if (!syncCode || typeof syncCode !== 'string' || !syncCode.trim()) {
+      return { success: false, message: 'Kode sinkronisasi kosong. Mohon tempelkan kode terlebih dahulu.' };
     }
-    const jsonStr = decodeURIComponent(escape(atob(syncCode.trim())));
-    const payload = JSON.parse(jsonStr);
 
-    if (!payload.user || !payload.user.id || !payload.user.email) {
-      return { success: false, message: 'Format kode sinkronisasi tidak valid atau korup.' };
+    let payload = null;
+    const cleanStr = syncCode.trim();
+
+    // Try safe UTF-8 decode
+    try {
+      const decodedStr = decodeURIComponent(Array.prototype.map.call(window.atob(cleanStr), (c) => {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      payload = JSON.parse(decodedStr);
+    } catch (decodeErr) {
+      try {
+        const fallbackStr = decodeURIComponent(escape(window.atob(cleanStr)));
+        payload = JSON.parse(fallbackStr);
+      } catch (fallbackErr) {
+        payload = JSON.parse(cleanStr); // in case raw JSON was pasted
+      }
+    }
+
+    if (!payload || !payload.user) {
+      return { success: false, message: 'Format kode sinkronisasi tidak valid.' };
     }
 
     const incomingUser = payload.user;
+    if (!incomingUser.id) {
+      incomingUser.id = 'usr_' + Date.now();
+    }
+
     let users = getUsers();
     const existingIndex = users.findIndex(
-      (u) => u.id === incomingUser.id || u.email.toLowerCase() === incomingUser.email.toLowerCase()
+      (u) => u.id === incomingUser.id || (u.email && incomingUser.email && u.email.toLowerCase() === incomingUser.email.toLowerCase())
     );
 
     if (existingIndex !== -1) {
@@ -548,7 +596,7 @@ export function importSyncCode(syncCode) {
     return { success: true, user: incomingUser, count: payload.apps?.length || 0 };
   } catch (err) {
     console.error('Failed to import sync code:', err);
-    return { success: false, message: 'Gagal mengimpor kode sinkronisasi: Pastikan seluruh kode tersalin dengan benar.' };
+    return { success: false, message: 'Gagal mengimpor kode sinkronisasi: Pastikan seluruh kode tersalin dengan lengkap.' };
   }
 }
 
